@@ -466,9 +466,11 @@ class NotificationManager:
         if platform.system() == "Windows":
             try:
                 # win10toast modülünü kontrol et
-                import importlib
-                if importlib.util.find_spec("win10toast"):
+                try:
+                    import win10toast
                     methods.append("win10toast")
+                except ImportError:
+                    pass
             except:
                 pass
                 
@@ -476,20 +478,26 @@ class NotificationManager:
         elif platform.system() == "Linux":
             try:
                 # notify-send varlığını kontrol et
-                if subprocess.call(["which", "notify-send"], stdout=subprocess.DEVNULL) == 0:
-                    methods.append("notify-send")
-                # zenity varlığını kontrol et
-                elif subprocess.call(["which", "zenity"], stdout=subprocess.DEVNULL) == 0:
-                    methods.append("zenity")
+                try:
+                    # notify-send varlığını kontrol et (sessizce)
+                    with open(os.devnull, 'w') as devnull:
+                        if subprocess.call(["which", "notify-send"], stdout=devnull, stderr=devnull) == 0:
+                            methods.append("notify-send")
+                        # zenity varlığını kontrol et
+                        elif subprocess.call(["which", "zenity"], stdout=devnull, stderr=devnull) == 0:
+                            methods.append("zenity")
+                except:
+                    pass
             except:
                 pass
                 
         # macOS bildirim yöntemlerini kontrol et
         elif platform.system() == "Darwin":
             try:
-                # osascript varlığını kontrol et
-                if subprocess.call(["which", "osascript"], stdout=subprocess.DEVNULL) == 0:
-                    methods.append("applescript")
+                # osascript varlığını kontrol et (sessizce)
+                with open(os.devnull, 'w') as devnull:
+                    if subprocess.call(["which", "osascript"], stdout=devnull, stderr=devnull) == 0:
+                        methods.append("applescript")
             except:
                 pass
         
@@ -836,46 +844,57 @@ class TrayManager:
     def _setup_tray(self):
         """Sistem tepsisi simgesini ayarlar."""
         try:
-            # pystray'i içe aktar
-            import pystray
-            from PIL import Image
-            
-            # Menüyü oluştur
-            def create_menu_items():
-                items = []
-                for item_data in self.menu_items:
-                    items.append(pystray.MenuItem(
-                        item_data["text"],
-                        item_data["command"]
-                    ))
-                return items
-            
-            # PIL görüntüsünü al (doğrudan verilebilir veya veriden yüklenebilir)
-            if isinstance(self.icon_data, Image.Image):
-                icon_image = self.icon_data
-            else:
-                # İkon verisinden yüklemeyi dene
-                icon_image = Image.open(io.BytesIO(self.icon_data))
-            
-            # Simge tıklama işleyicisi
-            def on_icon_click(icon, event):
-                if event.button == 1 and self.click_handler:  # Sol tıklama
-                    self.click_handler()
-            
-            # pystray simgesini oluştur
-            menu = pystray.Menu(*create_menu_items())
-            self.tray_icon = pystray.Icon(
-                name=self.tooltip,
-                icon=icon_image,
-                title=self.tooltip,
-                menu=menu
-            )
-            
-            # Tıklama olaylarını yapılandır
-            self.tray_icon.on_click = on_icon_click
-            
-            # Arka planda çalıştır
-            threading.Thread(target=lambda: self.tray_icon.run(), daemon=True).start()
+            # pystray'i içe aktarmayı dene
+            try:
+                import pystray
+                from PIL import Image
+                import io
+                
+                # Menüyü oluştur
+                def create_menu_items():
+                    items = []
+                    for item_data in self.menu_items:
+                        items.append(pystray.MenuItem(
+                            item_data["text"],
+                            item_data["command"]
+                        ))
+                    return items
+                
+                # PIL görüntüsünü al (doğrudan verilebilir veya veriden yüklenebilir)
+                if isinstance(self.icon_data, Image.Image):
+                    icon_image = self.icon_data
+                else:
+                    # İkon verisinden yüklemeyi dene
+                    icon_image = Image.open(io.BytesIO(self.icon_data))
+                
+                # Simge tıklama işleyicisi
+                def on_icon_click(icon, event):
+                    if hasattr(event, 'button'):
+                        if event.button == 1 and self.click_handler:  # Sol tıklama
+                            self.click_handler()
+                    else:
+                        # Bazı pystray sürümleri button özelliğine sahip değil
+                        if self.click_handler:
+                            self.click_handler()
+                
+                # pystray simgesini oluştur
+                menu = pystray.Menu(*create_menu_items())
+                self.tray_icon = pystray.Icon(
+                    name=self.tooltip,
+                    icon=icon_image,
+                    title=self.tooltip,
+                    menu=menu
+                )
+                
+                # Tıklama olaylarını yapılandır
+                self.tray_icon.on_click = on_icon_click
+                
+                # Arka planda çalıştır
+                if hasattr(self.tray_icon, 'run'):
+                    threading.Thread(target=lambda: self.tray_icon.run(), daemon=True).start()
+            except ImportError as e:
+                logger.error(f"pystray or PIL import error: {e}")
+                self.tray_icon = None
             
         except Exception as e:
             logger.error(f"Failed to setup tray icon: {e}")
@@ -970,13 +989,8 @@ class MainApplication(ttk.Frame):
         
     def set_app_icon(self):
         """Gömülü kaynaklardan uygulama simgesini ayarlar"""
-        try:
-            from PIL import Image, ImageTk
-            icon = Image.new('RGB', (64, 64), color=(0, 120, 212))
-            icon_photo = ImageTk.PhotoImage(icon)
-            self.master.iconphoto(True, icon_photo)
-        except Exception as e:
-            logger.error(f"Failed to set application icon: {e}")
+        # İkon ayarlama işlemini atlayalım, uygulama simgesiz çalışacak
+        pass
     
     def create_variables(self):
         """tkinter değişkenlerini oluşturur"""
@@ -1217,31 +1231,11 @@ bildirimler gösterecektir.
     
     def create_tray(self):
         """Sistem tepsisi simgesini ve menüsünü oluşturur"""
-        try:
-            # PIL ile doğrudan basit renkli bir simge oluştur
-            from PIL import Image
-            simple_icon = Image.new('RGB', (64, 64), color=(0, 120, 212))
-            
-            # Menü öğelerini tanımla
-            menu_items = [
-                {"text": "Göster", "command": self.show_window},
-                {"text": "Şimdi Tara", "command": self.scan_network},
-                {"text": "Çıkış", "command": self.quit_app}
-            ]
-            
-            # Sistem tepsisi simgesini oluştur
-            self.tray_manager = TrayManager(
-                "Viros Mitm",
-                simple_icon,  # PIL görüntüsünü doğrudan geçme
-                menu_items
-            )
-            
-            # Tıklama işleyicisini ayarla
-            self.tray_manager.set_click_handler(self.show_window)
-            
-        except Exception as e:
-            logger.error(f"Error creating tray icon: {e}")
-            # Tepsi simgesi olmadan devam et
+        # pystray veya PIL sorunlarından kaçınmak için tray desteğini devre dışı bırakıyoruz
+        logger.info("Sistem tepsisi desteği devre dışı bırakıldı")
+        
+        # Tray özelliğini atlıyoruz, bu program tray simgesi olmadan çalışacak
+        pass
     
     def show_window(self):
         """Sistem tepsisinden ana pencereyi gösterir"""
@@ -1636,4 +1630,19 @@ def main():
     root.mainloop()
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        error_msg = f"Hata: {str(e)}\n\n{traceback.format_exc()}"
+        print(error_msg)
+        try:
+            import tkinter as tk
+            from tkinter import messagebox
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror("Viros Mitm - Hata", error_msg)
+        except:
+            # Eğer tkinter kullanılamıyorsa
+            print(error_msg)
+            input("Devam etmek için Enter tuşuna basın...")
